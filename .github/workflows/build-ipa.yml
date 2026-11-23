@@ -1,0 +1,67 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    # macos-13 đã bị GitHub gỡ từ 12/2025 nên job sẽ treo mãi -> dùng macos-15 (Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Expo SDK 52 / React Native 0.76 ổn định nhất với Xcode 16.2
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app && xcodebuild -version
+
+      - name: Install dependencies
+        run: |
+          npm install
+          # Căn lại phiên bản các gói Expo cho đúng SDK 52
+          npx expo install --fix
+
+      - name: Prebuild iOS project (tự chạy pod install)
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build unsigned .app
+        working-directory: ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          echo "Workspace: $WORKSPACE | Scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build | tail -n 60
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find ios/build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          echo "App: $APP_PATH"
+          rm -rf Payload XamReader.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry XamReader.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XamReader-unsigned-ipa
+          path: XamReader.ipa
+          if-no-files-found: error
